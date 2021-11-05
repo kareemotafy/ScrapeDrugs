@@ -1,28 +1,56 @@
-import time
-from bs4 import BeautifulSoup
 import requests
-import hashlib
-import json
-import threading
+from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from slugify import slugify
+import sqlite3
+import json
+import time
 # from rich.console import Console
-
 # console = Console()
+
+start_time = time.time()
+
+connection = sqlite3.connect('drugs.db')
+cursor = connection.cursor()
+cursor.executescript("""
+    CREATE TABLE Gardenia (
+        name TEXT,
+        link TEXT,
+        category TEXT
+    );
+    CREATE TABLE GardeniaDetails (
+        id TEXT,
+        prescription TEXT
+    );
+    CREATE TABLE EDS (
+        name TEXT,
+        link TEXT,
+        category TEXT
+    );
+    CREATE TABLE EDSDetails (
+        id TEXT,
+        prescription TEXT
+    );
+""")
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:78.0) Gecko/20100101 Firefox/78.0'
 }
-start_time = time.time()
 
 # more workers faster scrapes less time
 # more likely to get timed out by server
-
 workers = 30
 JSONWorkers = 1
 detailWorkers = 30
 
 
+def insertDrug(table, obj):
+    print(f"INSERT INTO {table} VALUES {str(obj)}")
+    cursor.execute(f"INSERT INTO {table} VALUES {str(obj)}")
+
 # can do en and ar
+
+
 def getGardenia():
     json_file = open('datasets/Gardenia.json', 'w', encoding='utf-8')
     json_file_details = open(
@@ -38,11 +66,14 @@ def getGardenia():
         element = soup.find(
             'div', class_='woocommerce-Tabs-panel woocommerce-Tabs-panel--description panel entry-content wc-tab')
         if element != None:
-            obj = {hashlib.md5(slugify(name).encode()
-                               ).hexdigest(): element.get_text()}
+            id = hashlib.md5(slugify(name).encode()).hexdigest()
+            prescription = element.get_text()
+            tup = (id, prescription)
+            obj = {id: prescription}
             # console.print(obj, style="bold red")
             poolJSON.submit(json.dump, obj, json_file_details,
                             ensure_ascii=False, indent=4)
+            insertDrug('GardeniaDetails', tup)
 
     def getMeds(page):
         URL = f'https://gardeniapharmacy.com/product-category/find-a-medicine/page/{page}/?lang=en'
@@ -56,9 +87,13 @@ def getGardenia():
             obj = {
                 'name': name, 'link': link, 'category': span[1:]
             }
+            tup = (
+                name, link, span[1:]
+            )
             poolJSON.submit(json.dump, obj, json_file,
                             ensure_ascii=False, indent=4)
             poolDetails.submit(getMedDetails, link, name)
+            insertDrug('Gardenia', tup)
 
     for page in range(1, 221):
         pool.submit(getMeds, page)
@@ -100,12 +135,15 @@ def getEDS():
     def getMedDetails(URL, name):
         document = requests.get(URL, headers=headers)
         soup = BeautifulSoup(document.content, 'html.parser')
-        for element in soup.find_all('div', id='tab-description'):
-            obj = {hashlib.md5(slugify(name).encode()
-                               ).hexdigest(): element.get_text()}
-            # console.print(obj)
-            poolJSON.submit(json.dump, obj, json_file_details,
-                            ensure_ascii=False, indent=4)
+        element = soup.find('div', id='tab-description')
+        id = hashlib.md5(slugify(name).encode()).hexdigest()
+        prescription = element.get_text()
+        tup = (id, prescription)
+        obj = {id: prescription}
+        # console.print(obj)
+        poolJSON.submit(json.dump, obj, json_file_details,
+                        ensure_ascii=False, indent=4)
+        insertDrug('EDSDetails', tup)
 
     def getMeds(URL, page):
         # console.print(URL, style="bold cyan")
@@ -117,10 +155,12 @@ def getEDS():
             link = element.get('href')
             name = element.get_text()
             obj = {'link': link, 'name': name, 'category': category[:-12]}
+            tup = (name, link,  category[:-12])
             # console.print(obj)
             poolDetails.submit(getMedDetails, link, name)
             poolJSON.submit(json.dump, obj, json_file,
                             ensure_ascii=False, indent=4)
+            insertDrug('EDS', tup)
 
     catUrl = generateCategoryURL()
 
@@ -139,5 +179,7 @@ def getEDS():
     json_file.close()
     json_file_details.close()
 
+
+getEDS()
 
 print("time to complete: --- %s seconds ---" % (time.time() - start_time))
